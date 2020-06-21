@@ -1,0 +1,5 @@
+torch>=1.5.0
+numpy>=1.18.4
+matplotlib>=3.2.1
+jupyter>=1.0.0
+unityagents
