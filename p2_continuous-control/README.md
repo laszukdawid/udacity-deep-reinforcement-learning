@@ -41,3 +41,9 @@ The task is episodic, and in order to solve the environment,  your agent must ge
 ### Instructions
 
 Follow the instructions in `Continuous_Control.ipynb` to get started with training your own agent!  
+
+### Results
+
+For the full version of the report please see the Report.md file provided in this directory. The image below is a sneak peak into achieved rewards as a function of the episode. Blue, gree, red relates to instantenous reward, moving average (MA) over the last 20 and MA over the last 100, respectively. Black horizontal line marks value 30; the goal was for the red line (average over last 100) to cross that black line.
+
+<img src="p2_rewards.png" width="600px" height="300px" />

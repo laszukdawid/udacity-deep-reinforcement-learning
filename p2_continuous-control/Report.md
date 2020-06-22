@@ -22,7 +22,10 @@ To not put too much pressure on the agent from the very beginning we introduced 
 Episodes and their length are defined by the environment. In each episode the ball changes randomly its movement. It can move clockwise or counter-clockwise with some variable speeds (even zero at which points it rests in a random position).
 
 It took the agent about 20 episodes to star receiving noticeable scoring. It then took 30 more episodes to obtain the score of 20 (that's 200 steps when the arm is within the green sphere). The
-goal of average above 30 score in the last 100 episodes was achieved after the 165th episode. This result was obtained in about 30 min on our so-so Dell laptop with CUDA support and Ubuntu 20.04. Visualisation of the reward history is provided in the attached Jupyter notebook.
+goal of average above 30 score in the last 100 episodes was achieved after the 165th episode. The plot below shows the total reward value obtained from respective episodes (x axis). The solid blue line is the exact value from the episode, whereas dashed green and red refer to the average of the last 20 and 100 episodes, respectively. The task ended when the average for the last 100 episodes reached 30 (black horizontal line).
+This result was obtained in about 30 min on our so-so Dell laptop with CUDA support and Ubuntu 20.04.
+
+<img src="p2_rewards.png" width="800px" height="450px" />
 
 
 ## Conclusion
