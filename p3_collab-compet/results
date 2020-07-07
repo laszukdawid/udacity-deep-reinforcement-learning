@@ -1,0 +1,76 @@
+# Consistent agent ~0.01 (avg100) and the other raising. Maybe should be given a longer run up
+writer = SummaryWriter('runs/p3_maddpg_031')
+
+number_of_episodes = 20000
+max_episode_length = 200
+warmup_episodes = 100
+
+noise = 1.0
+noise_max, noise_min = 1, 0.1
+noise_reduction = 0.92#9992
+noise_reset_episodes = 1000
+
+episode_score_every = 100
+save_interval = 200
+
+config = {'batch_size': 128,
+          'p_batch_size': 3,
+          'n_batch_size': 0,
+          'buffer_size': int(1e5),
+          'number_updates': 1,
+          'update_every_iterations': 5,
+          'critic_lr': 3e-4, #2e-3,
+          'actor_lr': 1e-3, #1e-3,
+          'actor_lr_decay': 1e-4,
+          'critic_lr_decay': 1e-4,
+          'actor_tau': 0.001,
+          'critic_tau': 0.002,
+          'warm_up': 1e10, # disable
+          'hidden_layers': (128, 64),
+          'noise_scale': 1.,
+          'noise_sigma': .6,
+          'agents_number': agents_number,
+          'gradient_clip': 2.0,
+          'discount': 0.99,
+         }
+
+-----------------------------
+writer = SummaryWriter('runs/p3_maddpg_083')
+
+number_of_episodes = 10000
+max_episode_length = 200
+warmup_episodes = 20000000
+
+noise = 1.0
+noise_max, noise_min = 1., 0.1
+noise_reduction = 0.9999
+noise_reset_episodes = 1000
+
+episode_score_every = 100
+save_interval = 200
+
+config = {'batch_size': 400,
+          'p_batch_size': 3,
+          'n_batch_size': 3,
+          'buffer_size': int(5e5),
+          'number_updates': 1,
+          'update_every_iterations': 25,
+          'critic_lr': 1e-3, #2e-3,
+          'actor_lr': 1e-3, #1e-3,
+          'actor_lr_decay': 1e-4,
+          'critic_lr_decay': 1e-4,
+          'actor_tau': 0.001,
+          'critic_tau': 0.001,
+          'warm_up': 1e3, # disable
+          'hidden_layers': (250, 250),
+          'noise_scale': 1.2,
+          'noise_sigma': .5,
+          'agents_number': agents_number,
+          'gradient_clip': 0.5,
+          'discount': 0.8,
+         }
+
+maddpg = MADDPG(task, state_dim, action_dim, config, device, writer)
+maddpg.reset()
+
+all_rewards = np.zeros((number_of_episodes, agents_number))

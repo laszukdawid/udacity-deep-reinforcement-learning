@@ -3,22 +3,25 @@ import torch
 
 from networks import ActorBody, CriticBody
 from torch.optim import Adam
+from OUNoise import OUNoise
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class DDPGAgent:
-    def __init__(self, state_dim, action_dim, agents=2, hidden_layers=(128, 128), actor_lr=1e-3, actor_lr_decay=0, critic_lr=1e-3, critic_lr_decay=0, noise_scale=0.2, noise_sigma=0.1, clip=(-1, 1), device=None):
+    def __init__(self, state_dim, action_dim, agents=2, hidden_layers=(128, 128), actor_lr=1e-3, actor_lr_decay=0, critic_lr=2e-3, critic_lr_decay=0, noise_scale=0.2, noise_sigma=0.1, clip=(-1, 1), device=None):
         super(DDPGAgent, self).__init__()
         self.device = device if device is not None else DEVICE
 
-        self.actor = ActorBody(state_dim, action_dim, hidden_layers=hidden_layers).to(self.device)
+        self.actor = ActorBody(agents*state_dim, action_dim, hidden_layers=hidden_layers).to(self.device)
         self.critic = CriticBody(agents*state_dim, agents*action_dim, hidden_layers=hidden_layers).to(self.device)
-        self.target_actor = ActorBody(state_dim, action_dim, hidden_layers=hidden_layers).to(self.device)
+        self.target_actor = ActorBody(agents*state_dim, action_dim, hidden_layers=hidden_layers).to(self.device)
         self.target_critic = CriticBody(agents*state_dim, agents*action_dim,  hidden_layers=hidden_layers).to(self.device)
+        self.reset_agent()
 
+        # noise_theta = 0.15
         # self.noise = OUNoise((action_dim), scale=noise_scale, theta=noise_theta, sigma=noise_sigma, device=self.device)
-        self.noise = GaussianNoise(dim=(action_dim,), mu=0, sigma=noise_sigma, scale=noise_scale, device=device)
+        self.noise = GaussianNoise(dim=(action_dim,), mu=1e-8, sigma=noise_sigma, scale=noise_scale, device=device)
 
         # initialize targets same as original networks
         self.hard_update(self.target_actor, self.actor)

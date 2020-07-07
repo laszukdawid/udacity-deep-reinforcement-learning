@@ -1,14 +1,13 @@
 import logging
-from networks import CriticBody
 import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from typing import Dict
+from typing import Dict, List, Union
 
-from buffers import ReplayBuffer
+from buffers import ReplayBuffer, DirectedReplayBuffer
 from ddpg import DDPGAgent
 
 
@@ -28,7 +27,6 @@ class MADDPG:
 
         hidden_layers = config.get('hidden_layers', (400, 300))
         noise_scale = config.get('noise_scale', 0.2)
-        # noise_theta = 0.15 if 'noise_theta' not in config else config['noise_theta']
         noise_sigma = config.get('noise_sigma', 0.1)
         actor_lr = config.get('actor_lr', 1e-3)
         actor_lr_decay = config.get('actor_lr_decay', 0)
@@ -44,12 +42,15 @@ class MADDPG:
         self.maddpg_agent = [create_agent() for _ in range(self.agents_number)]
         
         self.discount = 0.99 if 'discount' not in config else config['discount']
-        self.gradient_clip = 2.0 if 'gradient_clip' not in config else config['gradient_clip']
+        self.gradient_clip = 1.0 if 'gradient_clip' not in config else config['gradient_clip']
 
         self.warm_up = 1e3 if 'warm_up' not in config else config['warm_up']
-        self.batch_size = 64 if 'batch_size' not in config else config['batch_size']
         self.buffer_size = int(1e6) if 'buffer_size' not in config else config['buffer_size']
+        self.batch_size = config.get('batch_size', 128)
+        self.p_batch_size = config.get('p_batch_size', int(self.batch_size // 2))
+        self.n_batch_size = config.get('n_batch_size', int(self.batch_size // 4))
         self.buffer = ReplayBuffer(self.batch_size, self.buffer_size)
+        # self.buffer = DirectedReplayBuffer(self.batch_size, self.buffer_size, p_batch_size=self.p_batch_size, n_batch_size=self.n_batch_size, device=self.device)
 
         self.update_every_iterations = config.get('update_every_iterations', 2)
         self.number_updates = config.get('number_updates', 2)
@@ -63,10 +64,15 @@ class MADDPG:
     def reset(self):
         self.iteration = 0
         self.reset_agents()
+        self.reset_noise()
 
     def reset_agents(self):
         for agent in self.maddpg_agent:
             agent.reset_agent()
+    
+    def reset_noise(self):
+        for agent in self.maddpg_agent:
+            agent.reset_noise()
 
     def step(self, state, action, reward, next_state, done) -> None:
         if np.isnan(state).any() or np.isnan(next_state).any():
@@ -80,29 +86,36 @@ class MADDPG:
             return
 
         if len(self.buffer) > self.batch_size and (self.iteration % self.update_every_iterations) == 0:
-            for agent_number in range(self.agents_number):
-                for _ in range(self.number_updates):
-                    batch = self.filter_batch(self.buffer.sample(), agent_number)
-                    self.learn(batch, agent_number)
-                    # self.update_targets()
+            self.evok_learning()
 
     def filter_batch(self, batch, agent_number):
         states, actions, rewards, next_states, dones = batch
-        agent_states = states[:, agent_number*self.state_dim:(agent_number+1)*self.state_dim].detach().clone()
-        agent_next_states = next_states[:, agent_number*self.state_dim:(agent_number+1)*self.state_dim].detach().clone()
-        agent_rewards = rewards.select(1, agent_number).view(-1, 1).detach().clone()
-        agent_dones = dones.select(1, agent_number).view(-1, 1).detach().clone()
+        agent_states = states[:, agent_number*self.state_dim:(agent_number+1)*self.state_dim].clone()
+        agent_next_states = next_states[:, agent_number*self.state_dim:(agent_number+1)*self.state_dim].clone()
+        agent_rewards = rewards.select(1, agent_number).view(-1, 1).clone()
+        agent_dones = dones.select(1, agent_number).view(-1, 1).clone()
         return (agent_states, states, actions, agent_rewards, agent_next_states, next_states, agent_dones)
 
-    def act(self, states, noise=0.0):
+    def evok_learning(self):
+        for _ in range(self.number_updates):
+            for agent_number in range(self.agents_number):
+                batch = self.filter_batch(self.buffer.sample(), agent_number)
+                self.learn(batch, agent_number)
+                # self.update_targets()
+
+    def act(self, states, noise: Union[None, List]=None):
         """get actions from all agents in the MADDPG object"""
 
-        tensor_states = torch.tensor(states).view(-1, self.agents_number, self.state_dim)
+        noise = [0]*self.agents_number if noise is None else noise
+
+        # tensor_states = torch.tensor(states).view(-1, self.agents_number, self.state_dim)
+        tensor_states = torch.tensor(states)
         with torch.no_grad():
             actions = []
             for agent_number, agent in enumerate(self.maddpg_agent):
                 agent.actor.eval()
-                actions += agent.act(tensor_states.select(1, agent_number), noise)
+                # actions += agent.act(tensor_states.select(1, agent_number), noise[agent_number])
+                actions += agent.act(tensor_states, noise[agent_number])
                 agent.actor.train()
 
         return torch.stack(actions)
@@ -118,14 +131,16 @@ class MADDPG:
 
         agent = self.maddpg_agent[agent_number]
 
-        next_actions = actions.detach().clone()
-        next_actions.data[:, action_offset:action_offset+self.action_dim] = agent.target_actor(agent_next_states)
+        next_actions = actions.clone()
+        # next_actions.data[:, action_offset:action_offset+self.action_dim] = agent.target_actor(agent_next_states)
+        next_actions[:, action_offset:action_offset+self.action_dim] = agent.target_actor(next_states)
 
         # critic loss
         Q_target_next = agent.target_critic(next_states, flatten_actions(next_actions))
         Q_target = rewards + (self.discount * Q_target_next * (1 - dones))
         Q_expected = agent.critic(states, actions)
-        critic_loss = F.mse_loss(Q_expected, Q_target)
+        critic_loss = F.smooth_l1_loss(Q_expected, Q_target)
+        # critic_loss = F.mse_loss(Q_expected, Q_target)
 
         # Minimize the loss
         agent.critic_optimizer.zero_grad()
@@ -134,8 +149,9 @@ class MADDPG:
         agent.critic_optimizer.step()
 
         # Compute actor loss
-        pred_actions = actions.detach().clone()
-        pred_actions.data[:, action_offset:action_offset+self.action_dim] = agent.actor(agent_states)
+        pred_actions = actions.clone()
+        # pred_actions.data[:, action_offset:action_offset+self.action_dim] = agent.actor(agent_states)
+        pred_actions[:, action_offset:action_offset+self.action_dim] = agent.actor(states)
 
         actor_loss = -agent.critic(states, flatten_actions(pred_actions)).mean()
         agent.actor_optimizer.zero_grad()
