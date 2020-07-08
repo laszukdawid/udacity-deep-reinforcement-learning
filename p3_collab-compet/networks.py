@@ -7,6 +7,7 @@ from typing import Tuple
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+
 def hidden_init(layer: nn.Module):
     fan_in = layer.weight.data.size()[0]
     lim = 1. / np.sqrt(fan_in)
@@ -30,7 +31,6 @@ class ActorBody(nn.Module):
 
     def reset_parameters(self):
         for layer in self.layers[:-1]:
-        # for layer in self.layers:
             layer.weight.data.uniform_(*hidden_init(layer))
         layer_init(self.layers[-1], (-3e-3, 3e-3))
 
@@ -43,29 +43,26 @@ class CriticBody(nn.Module):
     def __init__(self, input_dim: int, action_dim: int, hidden_layers=[64,64]):
         super(CriticBody, self).__init__()
 
-        # num_layers = [input_dim] + list(hidden_layers) + [1]
-        num_layers = [input_dim+action_dim] + list(hidden_layers) + [1]
+        num_layers = [input_dim] + list(hidden_layers) + [1]
         layers = [nn.Linear(in_dim, out_dim) for in_dim, out_dim in zip(num_layers[:-1], num_layers[1:])]
-        # layers[1] = nn.Linear(num_layers[1]+action_dim, num_layers[2])
+
+        # Injects `actions` into the second layer of the Critic
+        layers[1] = nn.Linear(num_layers[1]+action_dim, num_layers[2])
         self.layers = nn.ModuleList(layers)
 
-        self.bn = nn.BatchNorm1d(num_layers[1])
 
         self.gate = F.leaky_relu
         self.reset_parameters()
 
     def reset_parameters(self):
         for layer in self.layers[:-1]:
-        # for layer in self.layers:
             layer.weight.data.uniform_(*hidden_init(layer))
         layer_init(self.layers[-1], (-3e-3, 3e-3))
 
     def forward(self, x, actions):
-        # critic network simply outputs a number
         for idx, layer in enumerate(self.layers[:-1]):
-            if idx == 0:
+            if idx == 1:
                 x = self.gate(layer(torch.cat((x, actions), dim=1)))
-                x = self.bn(x)
             else:
                 x = self.gate(layer(x))
         return self.layers[-1](x)

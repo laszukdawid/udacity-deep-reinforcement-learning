@@ -4,10 +4,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 from typing import Dict, List, Union
 
-from buffers import ReplayBuffer, DirectedReplayBuffer
+from buffers import ReplayBuffer
 from ddpg import DDPGAgent
 
 
@@ -35,11 +34,11 @@ class MADDPG:
         self.actor_tau = config.get('actor_tau', 0.002)
         self.critic_tau = config.get('critic_tau', 0.002)
         create_agent = lambda: DDPGAgent(
-                                    state_dim, action_dim, agents=self.agents_number,
-                                    hidden_layers=hidden_layers, actor_lr=actor_lr, actor_lr_decay=actor_lr_decay, critic_lr=critic_lr, critic_lr_decay=critic_lr_decay,
+                                    state_dim, action_dim, agents=self.agents_number, hidden_layers=hidden_layers,
+                                    actor_lr=actor_lr, actor_lr_decay=actor_lr_decay, critic_lr=critic_lr, critic_lr_decay=critic_lr_decay,
                                     noise_scale=noise_scale, noise_sigma=noise_sigma,
                                     device=self.device)
-        self.maddpg_agent = [create_agent() for _ in range(self.agents_number)]
+        self.agents = [create_agent() for _ in range(self.agents_number)]
         
         self.discount = 0.99 if 'discount' not in config else config['discount']
         self.gradient_clip = 1.0 if 'gradient_clip' not in config else config['gradient_clip']
@@ -50,30 +49,20 @@ class MADDPG:
         self.p_batch_size = config.get('p_batch_size', int(self.batch_size // 2))
         self.n_batch_size = config.get('n_batch_size', int(self.batch_size // 4))
         self.buffer = ReplayBuffer(self.batch_size, self.buffer_size)
-        # self.buffer = DirectedReplayBuffer(self.batch_size, self.buffer_size, p_batch_size=self.p_batch_size, n_batch_size=self.n_batch_size, device=self.device)
 
         self.update_every_iterations = config.get('update_every_iterations', 2)
         self.number_updates = config.get('number_updates', 2)
 
         self.reset()
 
-    def hard_update(self, target, source):
-        for target_param, param in zip(target.parameters(), source.parameters()):
-            target_param.data.copy_(param.data)
-
     def reset(self):
         self.iteration = 0
         self.reset_agents()
-        self.reset_noise()
 
     def reset_agents(self):
-        for agent in self.maddpg_agent:
+        for agent in self.agents:
             agent.reset_agent()
     
-    def reset_noise(self):
-        for agent in self.maddpg_agent:
-            agent.reset_noise()
-
     def step(self, state, action, reward, next_state, done) -> None:
         if np.isnan(state).any() or np.isnan(next_state).any():
             print("State contains NaN. Skipping.")
@@ -108,14 +97,12 @@ class MADDPG:
 
         noise = [0]*self.agents_number if noise is None else noise
 
-        # tensor_states = torch.tensor(states).view(-1, self.agents_number, self.state_dim)
-        tensor_states = torch.tensor(states)
+        tensor_states = torch.tensor(states).view(-1, self.agents_number, self.state_dim)
         with torch.no_grad():
             actions = []
-            for agent_number, agent in enumerate(self.maddpg_agent):
+            for agent_number, agent in enumerate(self.agents):
                 agent.actor.eval()
-                # actions += agent.act(tensor_states.select(1, agent_number), noise[agent_number])
-                actions += agent.act(tensor_states, noise[agent_number])
+                actions += agent.act(tensor_states.select(1, agent_number), noise[agent_number])
                 agent.actor.train()
 
         return torch.stack(actions)
@@ -129,18 +116,16 @@ class MADDPG:
         # No need to flip since there are no paralle agents
         agent_states, states, actions, rewards, agent_next_states, next_states, dones = samples
 
-        agent = self.maddpg_agent[agent_number]
+        agent = self.agents[agent_number]
 
         next_actions = actions.clone()
-        # next_actions.data[:, action_offset:action_offset+self.action_dim] = agent.target_actor(agent_next_states)
-        next_actions[:, action_offset:action_offset+self.action_dim] = agent.target_actor(next_states)
+        next_actions[:, action_offset:action_offset+self.action_dim] = agent.target_actor(agent_next_states)
 
         # critic loss
         Q_target_next = agent.target_critic(next_states, flatten_actions(next_actions))
         Q_target = rewards + (self.discount * Q_target_next * (1 - dones))
         Q_expected = agent.critic(states, actions)
-        critic_loss = F.smooth_l1_loss(Q_expected, Q_target)
-        # critic_loss = F.mse_loss(Q_expected, Q_target)
+        critic_loss = F.mse_loss(Q_expected, Q_target)
 
         # Minimize the loss
         agent.critic_optimizer.zero_grad()
@@ -150,8 +135,7 @@ class MADDPG:
 
         # Compute actor loss
         pred_actions = actions.clone()
-        # pred_actions.data[:, action_offset:action_offset+self.action_dim] = agent.actor(agent_states)
-        pred_actions[:, action_offset:action_offset+self.action_dim] = agent.actor(states)
+        pred_actions[:, action_offset:action_offset+self.action_dim] = agent.actor(agent_states)
 
         actor_loss = -agent.critic(states, flatten_actions(pred_actions)).mean()
         agent.actor_optimizer.zero_grad()
@@ -164,12 +148,6 @@ class MADDPG:
         
         self._soft_update(agent.target_actor, agent.actor, self.actor_tau)
         self._soft_update(agent.target_critic, agent.critic, self.critic_tau)
-
-    def update_targets(self):
-        """soft update targets"""
-        for ddpg_agent in self.maddpg_agent:
-            self._soft_update(ddpg_agent.target_actor, ddpg_agent.actor, self.actor_tau)
-            self._soft_update(ddpg_agent.target_critic, ddpg_agent.critic, self.critic_tau)
 
     def _soft_update(self, target: nn.Module, source: nn.Module, tau) -> None:
         for target_param, param in zip(target.parameters(), source.parameters()):
